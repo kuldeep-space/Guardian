@@ -61,6 +61,8 @@ fun SettingsScreen(
         Spacer(Modifier.height(20.dp))
 
         // ── Face Recognition ─────────────────────────────────────────────────
+        val settings by viewModel.settings.collectAsState()
+        
         SettingsGroup(label = "Face Recognition") {
             var threshold by remember { mutableStateOf(0.55f) }
             Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
@@ -89,6 +91,46 @@ fun SettingsScreen(
                     )
                 )
             }
+            
+            HorizontalDivider(modifier = Modifier.padding(start = 16.dp), color = MaterialTheme.colorScheme.surfaceVariant, thickness = 0.5.dp)
+            
+            SettingsListItem(
+                icon     = Icons.Default.Visibility,
+                title    = "Show Lock Screen During Face Scan",
+                subtitle = "When disabled, authentication happens silently in the background.",
+                trailing = {
+                    Switch(
+                        checked = settings.showLockScreenOverlay,
+                        onCheckedChange = { viewModel.updateShowLockScreenOverlay(it) },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor   = MaterialTheme.colorScheme.background,
+                            checkedTrackColor   = MaterialTheme.colorScheme.primary,
+                            uncheckedThumbColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            uncheckedTrackColor = MaterialTheme.colorScheme.outlineVariant
+                        )
+                    )
+                }
+            )
+            
+            HorizontalDivider(modifier = Modifier.padding(start = 16.dp), color = MaterialTheme.colorScheme.surfaceVariant, thickness = 0.5.dp)
+            
+            SettingsListItem(
+                icon     = Icons.Default.Timer,
+                title    = "Smart Re-authentication Cache",
+                subtitle = "Reduces repeated face scans. Trusted sessions expire randomly between 1 to 3 minutes.",
+                trailing = {
+                    Switch(
+                        checked = settings.trustedAuthDurationMinutes > 0,
+                        onCheckedChange = { viewModel.updateTrustedAuthDurationMinutes(if (it) 1 else 0) },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor   = MaterialTheme.colorScheme.background,
+                            checkedTrackColor   = MaterialTheme.colorScheme.primary,
+                            uncheckedThumbColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            uncheckedTrackColor = MaterialTheme.colorScheme.outlineVariant
+                        )
+                    )
+                }
+            )
         }
 
         Spacer(Modifier.height(20.dp))

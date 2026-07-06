@@ -1,6 +1,7 @@
 package com.ai.guardian
 
 import android.app.Application
+import android.os.StrictMode
 import com.ai.guardian.di.AppContainer
 import com.ai.guardian.di.DefaultAppContainer
 
@@ -9,6 +10,22 @@ class GuardianApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        
+        if (BuildConfig.DEBUG) {
+            StrictMode.setThreadPolicy(
+                StrictMode.ThreadPolicy.Builder()
+                    .detectAll()
+                    .penaltyLog()
+                    .build()
+            )
+            StrictMode.setVmPolicy(
+                StrictMode.VmPolicy.Builder()
+                    .detectAll()
+                    .penaltyLog()
+                    .build()
+            )
+        }
+        
         container = DefaultAppContainer(this)
     }
 }

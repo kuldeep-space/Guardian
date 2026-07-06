@@ -44,42 +44,7 @@ class GuardianForegroundService : Service() {
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
-        android.util.Log.e("GuardianAI_Debug", "[FS] onTaskRemoved() called! PID=${android.os.Process.myPid()}. Scheduling restart...")
-        
-        // Use AlarmManager to restart the foreground service after 1 second to ensure monitoring continues
-        val restartIntent = Intent(applicationContext, this.javaClass).apply {
-            `package` = packageName
-        }
-        val pendingIntent = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                android.app.PendingIntent.getForegroundService(
-                    this,
-                    1,
-                    restartIntent,
-                    android.app.PendingIntent.FLAG_ONE_SHOT or android.app.PendingIntent.FLAG_IMMUTABLE
-                )
-            } else {
-                android.app.PendingIntent.getService(
-                    this,
-                    1,
-                    restartIntent,
-                    android.app.PendingIntent.FLAG_ONE_SHOT or android.app.PendingIntent.FLAG_IMMUTABLE
-                )
-            }
-        } else {
-            android.app.PendingIntent.getService(
-                this,
-                1,
-                restartIntent,
-                android.app.PendingIntent.FLAG_ONE_SHOT
-            )
-        }
-        val alarmManager = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
-        alarmManager.set(
-            android.app.AlarmManager.RTC_WAKEUP,
-            System.currentTimeMillis() + 1000,
-            pendingIntent
-        )
+        android.util.Log.e("GuardianAI_Debug", "[FS] onTaskRemoved() called! PID=${android.os.Process.myPid()}. The service will rely on START_STICKY or Accessibility Service for restart.")
     }
 
     private fun handlePackageChanged(packageName: String) {

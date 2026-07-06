@@ -27,6 +27,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.compose.navigation
 import com.ai.guardian.ui.screens.DashboardScreen
 import com.ai.guardian.ui.screens.BiometricSettingsScreen
 import com.ai.guardian.ui.screens.SettingsScreen
@@ -46,7 +47,7 @@ private val topLevelTabs = listOf(
 fun AppNavigation(viewModel: MainViewModel) {
     val navController = rememberNavController()
     val context = LocalContext.current
-    val startDest = if (hasAllPermissions(context)) "dashboard" else "permissions"
+    val startDest = if (hasAllPermissions(context)) "main_tabs" else "permissions"
 
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
@@ -67,7 +68,12 @@ fun AppNavigation(viewModel: MainViewModel) {
                             onClick = {
                                 if (!selected) {
                                     navController.navigate(tab.route) {
-                                        popUpTo(navController.graph.findStartDestination().id) {
+                                        // Pop up to the start destination of the current graph (main_tabs)
+                                        val currentGraph = navController.currentBackStackEntry?.destination?.parent
+                                        val startDestinationId = currentGraph?.startDestinationId
+                                            ?: navController.graph.findStartDestination().id
+
+                                        popUpTo(startDestinationId) {
                                             saveState = true
                                         }
                                         launchSingleTop = true
@@ -110,51 +116,54 @@ fun AppNavigation(viewModel: MainViewModel) {
             composable("permissions") {
                 com.ai.guardian.ui.screens.PermissionsScreen(
                     onAllPermissionsGranted = {
-                        navController.navigate("dashboard") {
+                        navController.navigate("main_tabs") {
                             popUpTo("permissions") { inclusive = true }
                         }
                     }
                 )
             }
-            composable("dashboard") {
-                DashboardScreen(viewModel = viewModel, navController = navController)
-            }
-            composable("face_security") {
-                val faces = viewModel.enrolledFaces.collectAsState().value
-                BiometricSettingsScreen(
-                    enrolledFaces    = faces,
-                    onRegisterClick  = {
-                        viewModel.reenrollProfileId   = null
-                        viewModel.reenrollProfileName = null
-                        navController.navigate("face_registration")
-                    },
-                    onTestClick      = { navController.navigate("face_recognition_test") },
-                    onReenrollClick  = { face ->
-                        viewModel.reenrollProfileId   = face.profile.id
-                        viewModel.reenrollProfileName = face.profile.name
-                        navController.navigate("face_registration")
-                    },
-                    onRenameClick    = { face, name -> viewModel.renameFace(face.profile.id, name) },
-                    onColorClick     = { face, color -> viewModel.updateAvatarColor(face.profile.id, color.toArgb()) },
-                    onDeleteClick    = { face -> viewModel.deleteFaceById(face.profile.id) },
-                    onBack           = { navController.popBackStack() }
-                )
-            }
-            composable("protected_apps") {
-                com.ai.guardian.ui.screens.AppSelectionScreen(
-                    viewModel = viewModel,
-                    onBack    = {
-                        navController.navigate("dashboard") {
-                            popUpTo("dashboard") { inclusive = false }
+            
+            navigation(startDestination = "dashboard", route = "main_tabs") {
+                composable("dashboard") {
+                    DashboardScreen(viewModel = viewModel, navController = navController)
+                }
+                composable("face_security") {
+                    val faces = viewModel.enrolledFaces.collectAsState().value
+                    BiometricSettingsScreen(
+                        enrolledFaces    = faces,
+                        onRegisterClick  = {
+                            viewModel.reenrollProfileId   = null
+                            viewModel.reenrollProfileName = null
+                            navController.navigate("face_registration")
+                        },
+                        onTestClick      = { navController.navigate("face_recognition_test") },
+                        onReenrollClick  = { face ->
+                            viewModel.reenrollProfileId   = face.profile.id
+                            viewModel.reenrollProfileName = face.profile.name
+                            navController.navigate("face_registration")
+                        },
+                        onRenameClick    = { face, name -> viewModel.renameFace(face.profile.id, name) },
+                        onColorClick     = { face, color -> viewModel.updateAvatarColor(face.profile.id, color.toArgb()) },
+                        onDeleteClick    = { face -> viewModel.deleteFaceById(face.profile.id) },
+                        onBack           = { navController.popBackStack() }
+                    )
+                }
+                composable("protected_apps") {
+                    com.ai.guardian.ui.screens.AppSelectionScreen(
+                        viewModel = viewModel,
+                        onBack    = {
+                            navController.navigate("dashboard") {
+                                popUpTo("dashboard") { inclusive = false }
+                            }
                         }
-                    }
-                )
-            }
-            composable("settings") {
-                SettingsScreen(
-                    viewModel         = viewModel,
-                    onNavigateToLogs  = { navController.navigate("security_logs") }
-                )
+                    )
+                }
+                composable("settings") {
+                    SettingsScreen(
+                        viewModel         = viewModel,
+                        onNavigateToLogs  = { navController.navigate("security_logs") }
+                    )
+                }
             }
             composable("security_logs") {
                 com.ai.guardian.ui.screens.SecurityLogsScreen(

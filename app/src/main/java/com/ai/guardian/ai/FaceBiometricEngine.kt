@@ -13,9 +13,24 @@ import com.ai.guardian.data.entity.FaceProfileWithTemplates
 import com.ai.guardian.data.entity.FaceTemplateEntity
 import com.ai.guardian.data.entity.FaceProfileEntity
 
+enum class FaceQuality {
+    GOOD,
+    INVALID_AREA,
+    TOO_FAR,
+    TOO_CLOSE,
+    NOT_STRAIGHT,
+    EYES_CLOSED
+}
+
 class FaceBiometricEngine(context: Context) {
     private val faceDetector = FaceDetectorHelper()
     private val mobileFaceNet = MobileFaceNet(context)
+
+    private var firstFrameTime: Long = -1L
+
+    fun resetWarmup() {
+        firstFrameTime = -1L
+    }
 
     // Memory Cache for recognition
     private val templateCache = mutableMapOf<FaceProfileEntity, List<FloatArray>>()
@@ -28,8 +43,15 @@ class FaceBiometricEngine(context: Context) {
         templateCache.clear()
         for (profileWithTemplates in profiles) {
             val floatArrays = profileWithTemplates.templates.mapNotNull { template ->
-                val arr = template.embeddingData.split(",").mapNotNull { it.toFloatOrNull() }.toFloatArray()
-                if (arr.size == 192) arr else null
+                val bytes = template.embeddingData
+                if (bytes.size == 192 * 4) {
+                    val buffer = java.nio.ByteBuffer.wrap(bytes)
+                    val floatArr = FloatArray(192)
+                    for (i in 0 until 192) {
+                        floatArr[i] = buffer.float
+                    }
+                    floatArr
+                } else null
             }
             templateCache[profileWithTemplates.profile] = floatArrays
         }
@@ -72,20 +94,20 @@ class FaceBiometricEngine(context: Context) {
 
     /**
      * Helper to validate quality of a detected face.
-     * Returns null if quality checks pass, or a String describing the failure reason.
+     * Returns FaceQuality.GOOD if quality checks pass, or the specific error reason.
      */
-    fun checkFaceQuality(face: Face, width: Int, height: Int): String? {
+    fun checkFaceQuality(face: Face, width: Int, height: Int): FaceQuality {
         val imageArea = (width * height).toFloat()
-        if (imageArea <= 0f) return "Invalid image area"
+        if (imageArea <= 0f) return FaceQuality.INVALID_AREA
 
         val faceArea = (face.boundingBox.width() * face.boundingBox.height()).toFloat()
         val faceRatio = faceArea / imageArea
 
         if (faceRatio < FaceRecognitionConfig.MIN_FACE_SIZE_RATIO) {
-            return "Move closer"
+            return FaceQuality.TOO_FAR
         }
         if (faceRatio > FaceRecognitionConfig.MAX_FACE_SIZE_RATIO) {
-            return "Move back"
+            return FaceQuality.TOO_CLOSE
         }
 
         // Relaxed movement thresholds for natural micro-movements
@@ -96,16 +118,16 @@ class FaceBiometricEngine(context: Context) {
         // Using relaxed thresholds (e.g., 30 degrees instead of strictly looking straight for general detection)
         // Pose strictness is handled in the UI for enrollment.
         if (rotZ > 35f) {
-            return "Straighten your head"
+            return FaceQuality.NOT_STRAIGHT
         }
 
         val leftEyeOpen = face.leftEyeOpenProbability ?: 1.0f
         val rightEyeOpen = face.rightEyeOpenProbability ?: 1.0f
         if (leftEyeOpen < 0.2f || rightEyeOpen < 0.2f) {
-            return "Open eyes"
+            return FaceQuality.EYES_CLOSED
         }
 
-        return null
+        return FaceQuality.GOOD
     }
 
     /**
@@ -117,6 +139,13 @@ class FaceBiometricEngine(context: Context) {
         try {
             val mediaImage = imageProxy.image
                 ?: return@withContext VerificationResult.Error("mediaImage is null")
+
+            if (firstFrameTime == -1L) {
+                firstFrameTime = System.currentTimeMillis()
+            }
+            if (System.currentTimeMillis() - firstFrameTime < 600) {
+                return@withContext VerificationResult.Warmup
+            }
 
             val rotationDegrees = imageProxy.imageInfo.rotationDegrees
 
@@ -132,17 +161,21 @@ class FaceBiometricEngine(context: Context) {
             val face = faces[0]
 
             // Step 2: Quality validation before inference
-            val qualityError = checkFaceQuality(face, imageProxy.width, imageProxy.height)
-            if (qualityError != null) {
-                return@withContext VerificationResult.PoorQuality(qualityError)
+            val quality = checkFaceQuality(face, imageProxy.width, imageProxy.height)
+            if (quality != FaceQuality.GOOD) {
+                return@withContext VerificationResult.PoorQuality(quality)
             }
 
             // Step 3: Run MobileFaceNet inference
-            val bitmap: Bitmap = imageProxy.toBitmap()
-            val embedding = mobileFaceNet.getFaceEmbedding(bitmap, face.boundingBox, rotationDegrees)
-                ?: return@withContext VerificationResult.Error("Failed to generate embedding")
-
-            return@withContext VerificationResult.Success(embedding, face)
+            var bitmap: Bitmap? = null
+            try {
+                bitmap = imageProxy.toBitmap()
+                val embedding = mobileFaceNet.getFaceEmbedding(bitmap, face.boundingBox, rotationDegrees)
+                    ?: return@withContext VerificationResult.Error("Failed to generate embedding")
+                return@withContext VerificationResult.Success(embedding, face)
+            } finally {
+                bitmap?.recycle()
+            }
         } catch (e: Exception) {
             android.util.Log.e("GuardianAI_Debug", "[AI] analyzeFrame error: ${e.message}", e)
             return@withContext VerificationResult.Error(e.message ?: "Unknown error")
@@ -164,9 +197,9 @@ class FaceBiometricEngine(context: Context) {
 
             val face = faces[0]
 
-            val qualityError = checkFaceQuality(face, bitmap.width, bitmap.height)
-            if (qualityError != null) {
-                return@withContext VerificationResult.PoorQuality(qualityError)
+            val quality = checkFaceQuality(face, bitmap.width, bitmap.height)
+            if (quality != FaceQuality.GOOD) {
+                return@withContext VerificationResult.PoorQuality(quality)
             }
 
             val embedding = mobileFaceNet.getFaceEmbedding(bitmap, face.boundingBox, rotationDegrees)
@@ -193,9 +226,9 @@ class FaceBiometricEngine(context: Context) {
 
             val face = faces[0]
 
-            val qualityError = checkFaceQuality(face, bitmap.width, bitmap.height)
-            if (qualityError != null) {
-                return@withContext VerificationResult.PoorQuality(qualityError)
+            val quality = checkFaceQuality(face, bitmap.width, bitmap.height)
+            if (quality != FaceQuality.GOOD) {
+                return@withContext VerificationResult.PoorQuality(quality)
             }
 
             val embedding = mobileFaceNet.getFaceEmbedding(bitmap, face.boundingBox, 0, isFrontCamera = false)
@@ -249,8 +282,9 @@ open class VerificationResult {
     object MultipleFaces : VerificationResult()
 
     open class Failed(val reason: String) : VerificationResult()
-    class PoorQuality(reasonStr: String) : Failed(reasonStr)
+    class PoorQuality(val quality: FaceQuality) : VerificationResult()
     class Error(val reasonStr: String) : Failed(reasonStr)
+    object Warmup : VerificationResult()
 
     data class Success(val embedding: FloatArray, val mlkitFace: Face) : VerificationResult()
 }

@@ -44,6 +44,7 @@ fun PermissionsScreen(onAllPermissionsGranted: () -> Unit) {
     var hasCamera      by remember { mutableStateOf(checkCameraPermission(context)) }
     var hasOverlay     by remember { mutableStateOf(Settings.canDrawOverlays(context)) }
     var hasA11y        by remember { mutableStateOf(checkA11yPermission(context)) }
+    var showA11yDisclosure by remember { mutableStateOf(false) }
 
     val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         hasCamera = granted
@@ -63,6 +64,27 @@ fun PermissionsScreen(onAllPermissionsGranted: () -> Unit) {
 
     LaunchedEffect(hasCamera, hasOverlay, hasA11y) {
         if (hasCamera && hasOverlay && hasA11y) onAllPermissionsGranted()
+    }
+
+    if (showA11yDisclosure) {
+        AlertDialog(
+            onDismissRequest = { showA11yDisclosure = false },
+            title = { Text("Accessibility Service Required", fontWeight = FontWeight.SemiBold) },
+            text = { Text("Guardian AI requires Accessibility Service permission to detect when you launch a protected application. This allows Guardian AI to instantly lock the screen and verify your face before granting access to the app.\n\nWe do not use this permission to read your screen content, collect personal data, or monitor your general device usage. The permission is strictly used to monitor app launches for security purposes.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showA11yDisclosure = false
+                    context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                }) {
+                    Text("I Understand")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showA11yDisclosure = false }) {
+                    Text("Cancel", color = MaterialTheme.colorScheme.error)
+                }
+            }
+        )
     }
 
     Column(
@@ -123,7 +145,7 @@ fun PermissionsScreen(onAllPermissionsGranted: () -> Unit) {
                     description = "Required to detect when protected apps are opened.",
                     isGranted   = hasA11y,
                     icon        = Icons.Default.Accessibility,
-                    onGrant     = { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+                    onGrant     = { showA11yDisclosure = true }
                 )
             }
         }

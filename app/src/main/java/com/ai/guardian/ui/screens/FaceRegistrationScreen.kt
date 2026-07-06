@@ -302,7 +302,10 @@ fun CaptureStep(
     var poseTimerSeconds        by remember { mutableIntStateOf(30) }
     var timerJob                by remember { mutableStateOf<Job?>(null) }
     var engine                  by remember { mutableStateOf<FaceBiometricEngine?>(null) }
+    val cameraExecutor          = remember { Executors.newSingleThreadExecutor() }
     val isProcessingRef         = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
+    var emaLuminance            by remember { mutableFloatStateOf(-1f) }
+    var currentLightingState    by remember { mutableStateOf(com.ai.guardian.ai.LightingState.NORMAL) }
 
     // ── UI-only state (does NOT affect recognition logic) ─────────────────────
     var faceDetected by remember { mutableStateOf(false) }
@@ -330,7 +333,7 @@ fun CaptureStep(
 
     LaunchedEffect(Unit) { engine = FaceBiometricEngine(context) }
 
-    DisposableEffect(Unit) { onDispose { timerJob?.cancel(); engine?.close() } }
+    DisposableEffect(Unit) { onDispose { timerJob?.cancel(); engine?.close(); cameraExecutor.shutdown() } }
 
     // ── Layout ────────────────────────────────────────────────────────────────
     Column(
@@ -422,7 +425,6 @@ fun CaptureStep(
                         factory = { ctx ->
                             val previewView = PreviewView(ctx)
                             val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
-                            val executor = Executors.newSingleThreadExecutor()
 
                             cameraProviderFuture.addListener({
                                 val cameraProvider = cameraProviderFuture.get()
@@ -435,9 +437,28 @@ fun CaptureStep(
                                     .setTargetResolution(android.util.Size(640, 480))
                                     .build()
 
-                                imageAnalysis.setAnalyzer(executor) { imageProxy ->
+                                imageAnalysis.setAnalyzer(cameraExecutor) { imageProxy ->
                                     if (isProcessingRef.getAndSet(true) || isCooldown || currentPoseStep >= 6 || engine == null) {
                                         imageProxy.close(); isProcessingRef.set(false); return@setAnalyzer
+                                    }
+
+                                    // Check Lighting Before ML Kit
+                                    val luminance = com.ai.guardian.ai.BrightnessEstimator.estimateLuminance(imageProxy)
+                                    val currentEma = if (emaLuminance < 0f) luminance.toFloat() else {
+                                        com.ai.guardian.ai.FaceRecognitionConfig.EMA_ALPHA * luminance + (1f - com.ai.guardian.ai.FaceRecognitionConfig.EMA_ALPHA) * emaLuminance
+                                    }
+                                    emaLuminance = currentEma
+                                    val lightingState = com.ai.guardian.ai.RecognitionPolicyManager.determineLightingState(currentEma)
+                                    currentLightingState = lightingState
+                                    val canEnroll = com.ai.guardian.ai.RecognitionPolicyManager.allowEnrollmentCapture(lightingState)
+
+                                    if (!canEnroll) {
+                                        isLightingGood = false
+                                        scanStatus = "Lighting is Too Dark"
+                                        consecutiveStableFrames = 0
+                                        imageProxy.close()
+                                        isProcessingRef.set(false)
+                                        return@setAnalyzer
                                     }
 
                                     coroutineScope.launch {
@@ -552,9 +573,11 @@ fun CaptureStep(
 
                                                         // Convert templates to FaceTemplateEntity
                                                         val templateEntities = templatesCopy.map {
+                                                            val byteBuf = java.nio.ByteBuffer.allocate(it.size * 4)
+                                                            it.forEach { floatVal -> byteBuf.putFloat(floatVal) }
                                                             com.ai.guardian.data.entity.FaceTemplateEntity(
                                                                 profileId = 0, // to be updated
-                                                                embeddingData = it.joinToString(",")
+                                                                embeddingData = byteBuf.array()
                                                             )
                                                         }
 
@@ -588,7 +611,14 @@ fun CaptureStep(
                                                 }
                                             } else if (result is VerificationResult.PoorQuality) {
                                                 faceDetected = true
-                                                scanStatus   = "Poor quality. Improve lighting or alignment."
+                                                scanStatus = when (result.quality) {
+                                                    com.ai.guardian.ai.FaceQuality.TOO_FAR -> "Move closer to the camera"
+                                                    com.ai.guardian.ai.FaceQuality.TOO_CLOSE -> "Move slightly further away"
+                                                    com.ai.guardian.ai.FaceQuality.NOT_STRAIGHT -> "Straighten your head"
+                                                    com.ai.guardian.ai.FaceQuality.EYES_CLOSED -> "Open your eyes"
+                                                    com.ai.guardian.ai.FaceQuality.INVALID_AREA -> "Adjust your position"
+                                                    else -> "Poor quality. Improve lighting or alignment."
+                                                }
                                             } else if (result is VerificationResult.MultipleFaces) {
                                                 faceDetected = false
                                                 scanStatus   = "Only one face should be visible."

@@ -23,5 +23,22 @@ object FaceRecognitionConfig {
 
     // Timeouts (in milliseconds)
     const val ENROLLMENT_TIMEOUT_MS = 15000L
-    const val AUTHENTICATION_TIMEOUT_MS = 7000L
+    const val AUTHENTICATION_TIMEOUT_NORMAL_MS = 7000L
+    const val AUTHENTICATION_TIMEOUT_DIM_MS = 8000L
+    const val AUTHENTICATION_TIMEOUT_VERY_DARK_MS = 9000L
+
+    // Lighting Thresholds (Luminance 0-255)
+    const val LUM_VERY_DARK = 50
+    const val LUM_DIM = 90
+    const val LUM_NORMAL = 130
+    const val LUM_GOOD = 170
+
+    // Adaptive Stabilizers & Policies
+    const val CONFIDENCE_MARGIN = 0.03f
+    const val BRIGHTNESS_SAMPLE_INTERVAL_MS = 250L
+    const val EXPOSURE_UPDATE_COOLDOWN_MS = 750L
+    const val EMA_ALPHA = 0.3f
+    const val WARMUP_FRAMES_TO_SKIP = 3
+    const val MAXIMUM_WARMUP_TIME_MS = 300L
+    const val STABLE_STATE_COUNT_REQUIRED = 3
 }

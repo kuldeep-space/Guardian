@@ -21,5 +21,25 @@ data class FaceTemplateEntity(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,
     val profileId: Long,
-    val embeddingData: String // Store float array as base64 or string (comma-separated)
-)
+    val embeddingData: ByteArray
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (javaClass != other?.javaClass) return false
+
+        other as FaceTemplateEntity
+
+        if (id != other.id) return false
+        if (profileId != other.profileId) return false
+        if (!embeddingData.contentEquals(other.embeddingData)) return false
+
+        return true
+    }
+
+    override fun hashCode(): Int {
+        var result = id.hashCode()
+        result = 31 * result + profileId.hashCode()
+        result = 31 * result + embeddingData.contentHashCode()
+        return result
+    }
+}

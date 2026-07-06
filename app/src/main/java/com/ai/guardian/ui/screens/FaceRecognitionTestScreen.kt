@@ -60,13 +60,18 @@ fun FaceRecognitionTestScreen(onBack: () -> Unit) {
 
     val faceProfiles = remember { mutableStateListOf<com.ai.guardian.data.entity.FaceProfileWithTemplates>() }
     var engine by remember { mutableStateOf<FaceBiometricEngine?>(null) }
+    val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
     val isProcessingRef = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
+    var emaLuminance by remember { mutableFloatStateOf(-1f) }
+    var currentLightingState by remember { mutableStateOf(com.ai.guardian.ai.LightingState.NORMAL) }
 
     LaunchedEffect(Unit) {
         engine = FaceBiometricEngine(context)
         try {
             val dao = com.ai.guardian.data.AppDatabase.getDatabase(context).faceDao()
-            val profiles = dao.getAllProfilesWithTemplates()
+            val profiles = withContext(Dispatchers.IO) {
+                dao.getAllProfilesWithTemplates()
+            }
             faceProfiles.clear()
             faceProfiles.addAll(profiles)
             engine?.loadTemplates(profiles)
@@ -78,6 +83,7 @@ fun FaceRecognitionTestScreen(onBack: () -> Unit) {
     DisposableEffect(Unit) {
         onDispose {
             engine?.close()
+            cameraExecutor.shutdown()
         }
     }
 
@@ -127,7 +133,6 @@ fun FaceRecognitionTestScreen(onBack: () -> Unit) {
                         factory = { ctx ->
                             val previewView = PreviewView(ctx)
                             val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
-                            val executor = Executors.newSingleThreadExecutor()
 
                             cameraProviderFuture.addListener({
                                 try {
@@ -141,7 +146,7 @@ fun FaceRecognitionTestScreen(onBack: () -> Unit) {
                                         .setTargetResolution(android.util.Size(640, 480))
                                         .build()
 
-                                    imageAnalysis.setAnalyzer(executor) { imageProxy ->
+                                    imageAnalysis.setAnalyzer(cameraExecutor) { imageProxy ->
                                         if (isProcessingRef.getAndSet(true) || testSubStep != 0 || engine == null) {
                                             imageProxy.close()
                                             isProcessingRef.set(false)
@@ -151,6 +156,13 @@ fun FaceRecognitionTestScreen(onBack: () -> Unit) {
                                         coroutineScope.launch {
                                             val startTime = System.currentTimeMillis()
                                             try {
+                                                val luminance = com.ai.guardian.ai.BrightnessEstimator.estimateLuminance(imageProxy)
+                                                val currentEma = if (emaLuminance < 0f) luminance.toFloat() else {
+                                                    com.ai.guardian.ai.FaceRecognitionConfig.EMA_ALPHA * luminance + (1f - com.ai.guardian.ai.FaceRecognitionConfig.EMA_ALPHA) * emaLuminance
+                                                }
+                                                emaLuminance = currentEma
+                                                currentLightingState = com.ai.guardian.ai.RecognitionPolicyManager.determineLightingState(currentEma)
+
                                                 val result = engine?.analyzeFrame(imageProxy)
                                                 if (result is VerificationResult.Success) {
                                                     val bitmap = imageProxy.toBitmap()
@@ -192,11 +204,21 @@ fun FaceRecognitionTestScreen(onBack: () -> Unit) {
                                                         }
                                                     }
                                                 } else if (result is VerificationResult.PoorQuality) {
-                                                    statusMessage = "Quality: ${result.reason}"
+                                                    val msg = when (result.quality) {
+                                                        com.ai.guardian.ai.FaceQuality.TOO_FAR -> "Move closer"
+                                                        com.ai.guardian.ai.FaceQuality.TOO_CLOSE -> "Move back"
+                                                        com.ai.guardian.ai.FaceQuality.NOT_STRAIGHT -> "Straighten your head"
+                                                        com.ai.guardian.ai.FaceQuality.EYES_CLOSED -> "Open eyes"
+                                                        com.ai.guardian.ai.FaceQuality.INVALID_AREA -> "Invalid image area"
+                                                        else -> "Poor quality"
+                                                    }
+                                                    statusMessage = "Quality: $msg"
                                                 } else if (result is VerificationResult.MultipleFaces) {
                                                     statusMessage = "Only one face should be visible"
                                                 } else if (result is VerificationResult.NoFace) {
                                                     statusMessage = "Align your face in the circle"
+                                                } else if (result is VerificationResult.Warmup) {
+                                                    statusMessage = "Optimizing Camera..."
                                                 }
                                             } catch (e: Exception) {
                                                 statusMessage = "Error: ${e.message}"
@@ -226,6 +248,8 @@ fun FaceRecognitionTestScreen(onBack: () -> Unit) {
                 
                 Spacer(Modifier.height(24.dp))
                 Text(statusMessage, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+                Spacer(Modifier.height(8.dp))
+                Text("Lighting: $currentLightingState", color = if (currentLightingState == com.ai.guardian.ai.LightingState.VERY_DARK) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
             }
             1 -> {
                 // Comparing

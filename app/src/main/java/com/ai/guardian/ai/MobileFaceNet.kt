@@ -12,9 +12,12 @@ import java.io.FileInputStream
 import java.nio.MappedByteBuffer
 import java.nio.channels.FileChannel
 import kotlin.math.sqrt
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 class MobileFaceNet(context: Context) {
     private var interpreter: Interpreter
+    private val inferenceMutex = Mutex()
 
     init {
         val options = Interpreter.Options().apply {
@@ -32,10 +35,12 @@ class MobileFaceNet(context: Context) {
         return fileChannel.map(FileChannel.MapMode.READ_ONLY, startOffset, declaredLength)
     }
 
-    fun getFaceEmbedding(bitmap: Bitmap, faceRect: Rect, rotationDegrees: Int = 0, isFrontCamera: Boolean = true): FloatArray? {
+    suspend fun getFaceEmbedding(bitmap: Bitmap, faceRect: Rect, rotationDegrees: Int = 0, isFrontCamera: Boolean = true): FloatArray? {
+        var croppedFace: Bitmap? = null
+        var uprightFace: Bitmap? = null
         try {
-            val croppedFace = cropFace(bitmap, faceRect)
-            val uprightFace = if (rotationDegrees != 0 || isFrontCamera) {
+            croppedFace = cropFace(bitmap, faceRect)
+            uprightFace = if (rotationDegrees != 0 || isFrontCamera) {
                 val matrix = android.graphics.Matrix().apply {
                     if (rotationDegrees != 0) {
                         postRotate(rotationDegrees.toFloat())
@@ -60,12 +65,22 @@ class MobileFaceNet(context: Context) {
             tensorImage = imageProcessor.process(tensorImage)
 
             val output = Array(1) { FloatArray(192) }
-            interpreter.run(tensorImage.buffer, output)
+            
+            inferenceMutex.withLock {
+                interpreter.run(tensorImage.buffer, output)
+            }
             
             return normalizeL2(output[0])
         } catch (e: Exception) {
             e.printStackTrace()
             return null
+        } finally {
+            if (croppedFace != null && croppedFace !== bitmap) {
+                croppedFace.recycle()
+            }
+            if (uprightFace != null && uprightFace !== croppedFace && uprightFace !== bitmap) {
+                uprightFace.recycle()
+            }
         }
     }
 

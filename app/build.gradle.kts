@@ -22,7 +22,8 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
@@ -32,6 +33,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
     kotlinOptions {
         jvmTarget = "11"
@@ -66,6 +68,7 @@ dependencies {
     ksp(libs.androidx.room.compiler)
     implementation(libs.sqlcipher)
     implementation(libs.androidx.sqlite.ktx)
+    implementation("androidx.security:security-crypto-ktx:1.1.0-alpha06")
 
     // DataStore — theme preference persistence
     implementation("androidx.datastore:datastore-preferences:1.1.1")
@@ -99,4 +102,7 @@ dependencies {
     androidTestImplementation(libs.androidx.junit)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     debugImplementation(libs.androidx.compose.ui.tooling)
+    
+    // LeakCanary
+    debugImplementation("com.squareup.leakcanary:leakcanary-android:2.14")
 }
