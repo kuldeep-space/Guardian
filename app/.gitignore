@@ -1,0 +1,171 @@
+# ==========================
+# Android / Gradle
+# ==========================
+.gradle/
+**/build/
+captures/
+.externalNativeBuild/
+.cxx/
+local.properties
+
+# ==========================
+# Android Studio / IntelliJ
+# ==========================
+.idea/
+*.iml
+*.ipr
+*.iws
+workspace.xml
+tasks.xml
+usage.statistics.xml
+dictionaries/
+shelf/
+caches/
+libraries/
+
+# ==========================
+# Kotlin / Java
+# ==========================
+out/
+bin/
+target/
+*.class
+*.kotlin_module
+
+# ==========================
+# APK / AAB
+# ==========================
+*.apk
+*.aab
+*.ap_
+output.json
+
+# ==========================
+# Signing Keys
+# ==========================
+*.jks
+*.keystore
+*.pem
+*.key
+*.p12
+
+# ==========================
+# Logs
+# ==========================
+*.log
+logcat*.txt
+hs_err_pid*
+replay_pid*
+
+# ==========================
+# Databases
+# ==========================
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# ==========================
+# Temporary Files
+# ==========================
+*.tmp
+*.temp
+*.bak
+*.orig
+*.swp
+*.swo
+*.old
+*.lock
+
+# ==========================
+# Dumps
+# ==========================
+*.b64
+*.dump
+*.trace
+*.prof
+*.hprof
+
+# ==========================
+# Reports
+# ==========================
+coverage/
+reports/
+benchmark/
+test-results/
+lint-results*
+mapping/
+
+# ==========================
+# Screenshots & Debug Images
+# (Outside res/ only)
+# ==========================
+screen*.png
+screenshot*.png
+debug*.png
+capture*.png
+
+# ==========================
+# Debug Text Files
+# ==========================
+*.txt
+!README.txt
+!LICENSE.txt
+
+# ==========================
+# VS Code
+# ==========================
+.vscode/
+
+# ==========================
+# macOS
+# ==========================
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# ==========================
+# Windows
+# ==========================
+Thumbs.db
+Desktop.ini
+
+# ==========================
+# Linux
+# ==========================
+*~
+
+# ==========================
+# Firebase / Crashlytics
+# ==========================
+firebase-debug.log
+crashlytics-build.properties
+
+# ==========================
+# Generated Documentation
+# ==========================
+docs/build/
+site/
+
+# ==========================
+# Profiling
+# ==========================
+*.trace
+*.perf
+
+# ==========================
+# DO NOT IGNORE
+# ==========================
+!gradlew
+!gradlew.bat
+!gradle/wrapper/gradle-wrapper.jar
+!settings.gradle
+!settings.gradle.kts
+!build.gradle
+!build.gradle.kts
+!gradle.properties
+!libs.versions.toml
+!AndroidManifest.xml
+!google-services.json

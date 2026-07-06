@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">GuardianAI</string>
+    <string name="accessibility_description">GuardianAI Accessibility Service is used to monitor foreground apps for device protection and screen time tracking. It does not collect or transmit personal data.</string>
+    <string name="device_admin_description">GuardianAI uses Device Admin to provide advanced lock-screen security features when unauthorized access is detected.</string>
+</resources>

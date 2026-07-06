@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "785735611531",
+    "project_id": "guardianai-kj",
+    "storage_bucket": "guardianai-kj.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:785735611531:android:132b3d46795fcf3f66d08e",
+        "android_client_info": {
+          "package_name": "com.ai.guardian"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDIuvK8qU57Wfi33U_dMa05AqeVgmwKpVE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
