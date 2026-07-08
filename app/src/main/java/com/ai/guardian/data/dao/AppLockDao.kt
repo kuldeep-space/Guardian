@@ -27,4 +27,7 @@ interface AppLockDao {
 
     @Query("DELETE FROM app_lock_rules")
     suspend fun deleteAll()
+
+    @Query("DELETE FROM app_lock_rules WHERE packageName = :packageName")
+    suspend fun deleteAppByPackage(packageName: String)
 }

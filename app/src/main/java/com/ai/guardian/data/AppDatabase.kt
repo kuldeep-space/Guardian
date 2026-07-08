@@ -5,13 +5,19 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import com.ai.guardian.data.dao.AppLockDao
+import com.ai.guardian.data.dao.AuditEventDao
+import com.ai.guardian.data.dao.ApprovalRequestDao
 import com.ai.guardian.data.dao.DeviceSettingsDao
 import com.ai.guardian.data.dao.FaceDao
 import com.ai.guardian.data.dao.RecognitionHistoryDao
+import com.ai.guardian.data.dao.PairedDeviceDao
 import com.ai.guardian.data.entity.AppLockEntity
+import com.ai.guardian.data.entity.AuditEventEntity
+import com.ai.guardian.data.entity.ApprovalRequestEntity
 import com.ai.guardian.data.entity.DeviceSettingsEntity
 import com.ai.guardian.data.entity.FaceProfileEntity
 import com.ai.guardian.data.entity.FaceTemplateEntity
+import com.ai.guardian.data.entity.PairedDeviceEntity
 import com.ai.guardian.data.entity.RecognitionHistoryEntity
 
 import androidx.security.crypto.EncryptedSharedPreferences
@@ -25,9 +31,12 @@ import net.sqlcipher.database.SupportFactory
         FaceTemplateEntity::class,
         DeviceSettingsEntity::class,
         AppLockEntity::class,
-        RecognitionHistoryEntity::class
+        RecognitionHistoryEntity::class,
+        PairedDeviceEntity::class,
+        AuditEventEntity::class,
+        ApprovalRequestEntity::class
     ],
-    version = 7,
+    version = 13,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -35,6 +44,9 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun deviceSettingsDao(): DeviceSettingsDao
     abstract fun appLockDao(): AppLockDao
     abstract fun recognitionHistoryDao(): RecognitionHistoryDao
+    abstract fun pairedDeviceDao(): PairedDeviceDao
+    abstract fun auditEventDao(): AuditEventDao
+    abstract fun approvalRequestDao(): ApprovalRequestDao
 
     companion object {
         @Volatile
@@ -105,6 +117,51 @@ abstract class AppDatabase : RoomDatabase() {
                     }
                 }
 
+                val MIGRATION_7_8 = object : androidx.room.migration.Migration(7, 8) {
+                    override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                        db.execSQL("CREATE TABLE IF NOT EXISTS `paired_devices` (`uuid` TEXT NOT NULL, `deviceName` TEXT NOT NULL, `pairingKey` TEXT NOT NULL, `addedAt` INTEGER NOT NULL, PRIMARY KEY(`uuid`))")
+                    }
+                }
+
+                val MIGRATION_8_9 = object : androidx.room.migration.Migration(8, 9) {
+                    override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                        db.execSQL("ALTER TABLE app_lock_rules ADD COLUMN lastServerTimestamp INTEGER NOT NULL DEFAULT 0")
+                    }
+                }
+
+                val MIGRATION_9_10 = object : androidx.room.migration.Migration(9, 10) {
+                    override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                        db.execSQL("CREATE TABLE IF NOT EXISTS `audit_events` (`id` TEXT NOT NULL, `eventType` TEXT NOT NULL, `detail` TEXT NOT NULL DEFAULT '', `timestamp` INTEGER NOT NULL, `isSynced` INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(`id`))")
+                        db.execSQL("CREATE TABLE IF NOT EXISTS `approval_requests` (`requestId` TEXT NOT NULL, `action` TEXT NOT NULL, `status` TEXT NOT NULL DEFAULT 'PENDING', `requestedAt` INTEGER NOT NULL, `expiresAt` INTEGER NOT NULL, `tokenNonce` TEXT NOT NULL, PRIMARY KEY(`requestId`))")
+                    }
+                }
+
+                val MIGRATION_10_11 = object : androidx.room.migration.Migration(10, 11) {
+                    override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                        // 0 = false (this is a Child device we manage), 1 = true (this is the Parent above us)
+                        db.execSQL("ALTER TABLE paired_devices ADD COLUMN isParentDevice INTEGER NOT NULL DEFAULT 0")
+                    }
+                }
+
+                val MIGRATION_11_12 = object : androidx.room.migration.Migration(11, 12) {
+                    override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                        db.execSQL("ALTER TABLE device_settings ADD COLUMN configurationVersion INTEGER NOT NULL DEFAULT 1")
+                        db.execSQL("ALTER TABLE device_settings ADD COLUMN isRemotelyLocked INTEGER NOT NULL DEFAULT 0")
+                    }
+                }
+
+                val MIGRATION_12_13 = object : androidx.room.migration.Migration(12, 13) {
+                    override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                        db.execSQL("ALTER TABLE device_settings ADD COLUMN securityPinHash TEXT")
+                        db.execSQL("ALTER TABLE device_settings ADD COLUMN securityPinIv TEXT")
+                        db.execSQL("ALTER TABLE device_settings ADD COLUMN securityPinSalt TEXT")
+                        db.execSQL("ALTER TABLE device_settings ADD COLUMN isPinConfigured INTEGER NOT NULL DEFAULT 0")
+                        db.execSQL("ALTER TABLE device_settings ADD COLUMN pinVersion INTEGER NOT NULL DEFAULT 0")
+                        db.execSQL("ALTER TABLE device_settings ADD COLUMN pinUpdatedAt INTEGER NOT NULL DEFAULT 0")
+                        db.execSQL("ALTER TABLE device_settings ADD COLUMN pinResetRequired INTEGER NOT NULL DEFAULT 0")
+                    }
+                }
+
                 val masterKey = MasterKey.Builder(context)
                     .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
                     .build()
@@ -153,7 +210,7 @@ abstract class AppDatabase : RoomDatabase() {
                     "guardian_database"
                 )
                 .openHelperFactory(factory)
-                .addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+                .addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13)
                 .fallbackToDestructiveMigration()
                 .build()
                 INSTANCE = instance

@@ -20,12 +20,16 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ai.guardian.ui.theme.*
+import com.ai.guardian.viewmodel.DeviceViewModel
 import com.ai.guardian.viewmodel.MainViewModel
 
 @Composable
 fun SettingsScreen(
     viewModel: MainViewModel,
-    onNavigateToLogs: () -> Unit
+    deviceViewModel: DeviceViewModel = androidx.lifecycle.viewmodel.compose.viewModel(),
+    onNavigateToLogs: () -> Unit,
+    onNavigateToPairDevice: () -> Unit,
+    onNavigateToRemoteDevice: (String, String) -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -38,6 +42,25 @@ fun SettingsScreen(
             Spacer(Modifier.height(24.dp))
             Text("Settings", fontSize = 24.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground, lineHeight = 32.sp)
             Spacer(Modifier.height(24.dp))
+        }
+
+        // Collect settings once for the whole screen
+        val settings by viewModel.settings.collectAsState()
+        
+        val context = androidx.compose.ui.platform.LocalContext.current
+        val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+        var isDeviceAdmin by remember { mutableStateOf(com.ai.guardian.security.DevicePolicyController(context).isDeviceAdmin) }
+
+        DisposableEffect(lifecycleOwner) {
+            val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+                if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                    isDeviceAdmin = com.ai.guardian.security.DevicePolicyController(context).isDeviceAdmin
+                }
+            }
+            lifecycleOwner.lifecycle.addObserver(observer)
+            onDispose {
+                lifecycleOwner.lifecycle.removeObserver(observer)
+            }
         }
 
         // ── Security ─────────────────────────────────────────────────────────
@@ -56,13 +79,135 @@ fun SettingsScreen(
                 subtitle = "Require re-scan after inactivity",
                 trailing = { Text("7 s", fontSize = 14.sp, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Medium) }
             )
+            SettingsDivider()
+            SettingsListItem(
+                icon     = Icons.Default.AdminPanelSettings,
+                title    = "Device Administrator",
+                subtitle = if (isDeviceAdmin) "Active - Protection enabled" else "Inactive - Tap to enable",
+                onClick  = {
+                    if (!isDeviceAdmin) {
+                        viewModel.runWithPinProtection("Enable Device Admin") {
+                            val intent = android.content.Intent(android.app.admin.DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
+                                putExtra(android.app.admin.DevicePolicyManager.EXTRA_DEVICE_ADMIN, android.content.ComponentName(context, com.ai.guardian.services.GuardianDeviceAdminReceiver::class.java))
+                                putExtra(android.app.admin.DevicePolicyManager.EXTRA_ADD_EXPLANATION, "Guardian requires Device Administrator privileges to prevent unauthorized uninstallation by children.")
+                            }
+                            context.startActivity(intent)
+                        }
+                    } else {
+                        viewModel.runWithPinProtection("Disable Device Admin") {
+                            val intent = android.content.Intent(android.provider.Settings.ACTION_SECURITY_SETTINGS)
+                            context.startActivity(intent)
+                        }
+                    }
+                },
+                trailing = {
+                    Switch(
+                        checked = isDeviceAdmin,
+                        onCheckedChange = null, // Handled by onClick
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor   = MaterialTheme.colorScheme.background,
+                            checkedTrackColor   = MaterialTheme.colorScheme.primary,
+                            uncheckedThumbColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            uncheckedTrackColor = MaterialTheme.colorScheme.outlineVariant
+                        )
+                    )
+                }
+            )
+        }
+
+        Spacer(Modifier.height(20.dp))
+
+        // ── Guardian Security PIN ─────────────────────────────────────────────
+        SettingsGroup(label = "Guardian Security PIN") {
+            val pinConfigured = settings.isPinConfigured
+            val pinVersion    = settings.pinVersion
+            val pinUpdatedAt  = settings.pinUpdatedAt
+            
+            var showInitialPinDialog by remember { mutableStateOf(false) }
+
+            val lastUpdatedText = remember(pinUpdatedAt) {
+                if (pinUpdatedAt > 0L) {
+                    val sdf = java.text.SimpleDateFormat("MMM dd, yyyy HH:mm", java.util.Locale.getDefault())
+                    sdf.format(java.util.Date(pinUpdatedAt))
+                } else "Never"
+            }
+
+            SettingsListItem(
+                icon     = Icons.Default.Pin,
+                title    = "Security PIN",
+                subtitle = if (pinConfigured)
+                    "Configured · v$pinVersion · Updated $lastUpdatedText"
+                else
+                    "Not configured — Tap to set initial PIN",
+                onClick  = { if (!pinConfigured) showInitialPinDialog = true },
+                trailing = {
+                    Surface(
+                        shape = androidx.compose.foundation.shape.RoundedCornerShape(20.dp),
+                        color = if (pinConfigured)
+                            MaterialTheme.colorScheme.primaryContainer
+                        else
+                            MaterialTheme.colorScheme.errorContainer
+                    ) {
+                        Text(
+                            if (pinConfigured) "Active" else "Not Set",
+                            modifier = androidx.compose.ui.Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (pinConfigured)
+                                MaterialTheme.colorScheme.onPrimaryContainer
+                            else
+                                MaterialTheme.colorScheme.onErrorContainer
+                        )
+                    }
+                }
+            )
+            
+            if (showInitialPinDialog) {
+                var newPin by remember { mutableStateOf("") }
+                val context = androidx.compose.ui.platform.LocalContext.current
+                AlertDialog(
+                    onDismissRequest = { showInitialPinDialog = false },
+                    title = { Text("Set Initial PIN") },
+                    text = {
+                        Column {
+                            Text("Enter a 4-6 digit Guardian PIN. This will sync to the Parent device upon pairing.")
+                            Spacer(Modifier.height(12.dp))
+                            OutlinedTextField(
+                                value = newPin,
+                                onValueChange = { if (it.length <= 6 && it.all { c -> c.isDigit() }) newPin = it },
+                                label = { Text("Security PIN") },
+                                singleLine = true,
+                                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.NumberPassword)
+                            )
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                viewModel.setInitialChildPin(newPin, context)
+                                showInitialPinDialog = false
+                            },
+                            enabled = newPin.length in 4..6
+                        ) {
+                            Text("Save")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showInitialPinDialog = false }) { Text("Cancel") }
+                    }
+                )
+            }
+            SettingsDivider()
+            SettingsListItem(
+                icon     = Icons.Default.Info,
+                title    = "How it works",
+                subtitle = "Guardian PIN is set by the Parent remotely. It must be entered before changing any Guardian settings, disabling accessibility, or uninstalling Guardian.",
+            )
         }
 
         Spacer(Modifier.height(20.dp))
 
         // ── Face Recognition ─────────────────────────────────────────────────
-        val settings by viewModel.settings.collectAsState()
-        
         SettingsGroup(label = "Face Recognition") {
             Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
                 Row(
@@ -130,6 +275,70 @@ fun SettingsScreen(
                     )
                 }
             )
+
+            HorizontalDivider(modifier = Modifier.padding(start = 16.dp), color = MaterialTheme.colorScheme.surfaceVariant, thickness = 0.5.dp)
+
+            SettingsListItem(
+                icon     = Icons.Default.FaceRetouchingNatural,
+                title    = "Liveness Detection",
+                subtitle = "Requires the face to blink or move. Prevents photo spoofing. Guardian PIN required to change.",
+                trailing = {
+                    Switch(
+                        checked = settings.isLivenessDetectionEnabled,
+                        onCheckedChange = { viewModel.updateLivenessDetection(it) },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor   = MaterialTheme.colorScheme.background,
+                            checkedTrackColor   = MaterialTheme.colorScheme.primary,
+                            uncheckedThumbColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            uncheckedTrackColor = MaterialTheme.colorScheme.outlineVariant
+                        )
+                    )
+                }
+            )
+        }
+
+        Spacer(Modifier.height(20.dp))
+        
+        // ── Device Management ────────────────────────────────────────────────
+        val pairedDevices by deviceViewModel.pairedDevices.collectAsState()
+        val enrolledFaces by viewModel.enrolledFaces.collectAsState()
+        val isDeviceManagementEnabled = enrolledFaces.isNotEmpty()
+        
+        SettingsGroup(label = "Device Management") {
+            SettingsListItem(
+                icon     = Icons.Default.QrCodeScanner,
+                title    = "Connect / This Device",
+                subtitle = if (isDeviceManagementEnabled) "Manage remote connection with other devices" else "Register a face first to enable",
+                onClick  = { if (isDeviceManagementEnabled) onNavigateToPairDevice() },
+                trailing = { Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp)) }
+            )
+            
+            if (pairedDevices.isNotEmpty()) {
+                SettingsDivider()
+                pairedDevices.forEachIndexed { index, device ->
+                    SettingsListItem(
+                        icon     = Icons.Default.Smartphone,
+                        title    = device.deviceName,
+                        subtitle = "Connected via Guardian",
+                        onClick  = { onNavigateToRemoteDevice(device.uuid, device.deviceName) },
+                        trailing = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                IconButton(onClick = {
+                                    viewModel.runWithPinProtection("unpair ${device.deviceName}") {
+                                        deviceViewModel.removePairedDevice(device)
+                                    }
+                                }) {
+                                    Icon(Icons.Default.Delete, "Remove Device", tint = MaterialTheme.colorScheme.error)
+                                }
+                                Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+                            }
+                        }
+                    )
+                    if (index < pairedDevices.lastIndex) {
+                        SettingsDivider()
+                    }
+                }
+            }
         }
 
         Spacer(Modifier.height(20.dp))

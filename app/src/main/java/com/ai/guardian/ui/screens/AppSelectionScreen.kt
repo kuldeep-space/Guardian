@@ -58,20 +58,33 @@ fun AppSelectionScreen(viewModel: MainViewModel, onBack: () -> Unit) {
     var selectedCat by remember { mutableStateOf("All") }
     val categories  = listOf("All", "Favorites", "Social", "Banking", "Work", "Games", "Others")
 
+data class AppUiModel(
+    val info: android.content.pm.ApplicationInfo,
+    val packageName: String,
+    val appName: String,
+    val isProtected: Boolean
+)
+
     LaunchedEffect(Unit) {
         withContext(Dispatchers.IO) {
-            allApps = context.packageManager
-                .getInstalledApplications(PackageManager.GET_META_DATA)
-                .filter { it.flags and ApplicationInfo.FLAG_SYSTEM == 0 }
+            val intent = android.content.Intent(android.content.Intent.ACTION_MAIN, null).apply {
+                addCategory(android.content.Intent.CATEGORY_LAUNCHER)
+            }
+            val resolveInfos = context.packageManager.queryIntentActivities(intent, 0)
+            val apps = resolveInfos.map { it.activityInfo.applicationInfo }
+                // Optional: remove the filter below if you want to allow locking system apps like Settings, Camera, etc.
+                // .filter { it.flags and ApplicationInfo.FLAG_SYSTEM == 0 } 
+                .distinctBy { it.packageName }
                 .sortedBy { context.packageManager.getApplicationLabel(it).toString() }
+            allApps = apps
             isLoading = false
         }
     }
 
     val filteredApps = remember(allApps, searchQuery, selectedCat, lockedApps) {
-        allApps.filter { info ->
-            val name        = context.packageManager.getApplicationLabel(info).toString()
+        allApps.mapNotNull { info ->
             val pkg         = info.packageName
+            val name        = context.packageManager.getApplicationLabel(info).toString()
             val isProtected = lockedApps.any { it.packageName == pkg && it.isProtected }
             val cat         = resolveCategory(pkg, isProtected)
             val matchSearch = name.contains(searchQuery, ignoreCase = true) ||
@@ -79,7 +92,12 @@ fun AppSelectionScreen(viewModel: MainViewModel, onBack: () -> Unit) {
             val matchCat    = selectedCat == "All" ||
                               (selectedCat == "Favorites" && isProtected) ||
                               cat == selectedCat
-            matchSearch && matchCat
+            
+            if (matchSearch && matchCat) {
+                AppUiModel(info, pkg, name, isProtected)
+            } else {
+                null
+            }
         }
     }
 
@@ -175,21 +193,17 @@ fun AppSelectionScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                     color    = MaterialTheme.colorScheme.surface
                 ) {
                     LazyColumn {
-                        items(filteredApps, key = { it.packageName }) { info ->
-                            val pkg         = info.packageName
-                            val appName     = context.packageManager.getApplicationLabel(info).toString()
-                            val isProtected = lockedApps.any { it.packageName == pkg && it.isProtected }
-
+                        items(filteredApps, key = { it.packageName }) { appModel ->
                             AppRow(
-                                packageName = pkg,
-                                appName     = appName,
-                                isProtected = isProtected,
-                                info        = info,
+                                packageName = appModel.packageName,
+                                appName     = appModel.appName,
+                                isProtected = appModel.isProtected,
+                                info        = appModel.info,
                                 onToggle    = { checked ->
-                                    viewModel.toggleAppLock(AppLockEntity(packageName = pkg, appName = appName, isProtected = checked))
+                                    viewModel.toggleAppLock(AppLockEntity(packageName = appModel.packageName, appName = appModel.appName, isProtected = checked))
                                 }
                             )
-                            if (info != filteredApps.last()) {
+                            if (appModel != filteredApps.last()) {
                                 HorizontalDivider(modifier = Modifier.padding(start = 72.dp), color = MaterialTheme.colorScheme.surfaceVariant, thickness = 0.5.dp)
                             }
                         }

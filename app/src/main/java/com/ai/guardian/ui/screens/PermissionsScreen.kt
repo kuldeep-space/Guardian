@@ -14,6 +14,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Accessibility
+import androidx.compose.material.icons.filled.BatteryStd
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Layers
@@ -44,6 +45,7 @@ fun PermissionsScreen(onAllPermissionsGranted: () -> Unit) {
     var hasCamera      by remember { mutableStateOf(checkCameraPermission(context)) }
     var hasOverlay     by remember { mutableStateOf(Settings.canDrawOverlays(context)) }
     var hasA11y        by remember { mutableStateOf(checkA11yPermission(context)) }
+    var isBatteryIgnored by remember { mutableStateOf(checkBatteryOptimization(context)) }
     var showA11yDisclosure by remember { mutableStateOf(false) }
 
     val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -55,14 +57,15 @@ fun PermissionsScreen(onAllPermissionsGranted: () -> Unit) {
             if (event == Lifecycle.Event.ON_RESUME) {
                 hasOverlay = Settings.canDrawOverlays(context)
                 hasA11y    = checkA11yPermission(context)
+                isBatteryIgnored = checkBatteryOptimization(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    LaunchedEffect(hasCamera, hasOverlay, hasA11y) {
-        if (hasCamera && hasOverlay && hasA11y) onAllPermissionsGranted()
+    LaunchedEffect(hasCamera, hasOverlay, hasA11y, isBatteryIgnored) {
+        if (hasCamera && hasOverlay && hasA11y && isBatteryIgnored) onAllPermissionsGranted()
     }
 
     if (showA11yDisclosure) {
@@ -146,6 +149,24 @@ fun PermissionsScreen(onAllPermissionsGranted: () -> Unit) {
                     icon        = Icons.Default.Accessibility,
                     onGrant     = { showA11yDisclosure = true }
                 )
+                HorizontalDivider(modifier = Modifier.padding(start = 16.dp), color = MaterialTheme.colorScheme.surfaceVariant, thickness = 0.5.dp)
+                PermissionItem(
+                    title       = "Battery & Auto-start",
+                    description = "Required to prevent the system from killing Guardian in the background.",
+                    isGranted   = isBatteryIgnored,
+                    icon        = Icons.Default.BatteryStd,
+                    onGrant     = {
+                        try {
+                            val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                            intent.data = Uri.parse("package:${context.packageName}")
+                            context.startActivity(intent)
+                        } catch (e: Exception) {
+                            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                            intent.data = Uri.parse("package:${context.packageName}")
+                            context.startActivity(intent)
+                        }
+                    }
+                )
             }
         }
     }
@@ -215,4 +236,9 @@ private fun checkA11yPermission(ctx: Context): Boolean {
             c.equals("${ctx.packageName}/com.ai.guardian.services.GuardianAccessibilityService", ignoreCase = true)) return true
     }
     return false
+}
+
+private fun checkBatteryOptimization(ctx: Context): Boolean {
+    val pm = ctx.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+    return pm.isIgnoringBatteryOptimizations(ctx.packageName)
 }

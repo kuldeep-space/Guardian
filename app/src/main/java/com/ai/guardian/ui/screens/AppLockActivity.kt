@@ -198,9 +198,11 @@ class AppLockActivity : ComponentActivity() {
         }
         val packageName = intent.getStringExtra("EXTRA_PACKAGE_NAME") ?: "Unknown App"
         val showOverlay = intent.getBooleanExtra("EXTRA_SHOW_OVERLAY", true)
-        android.util.Log.d("GuardianAI_Debug", "[Lock] onCreate() pkg=$packageName showOverlay=$showOverlay")
+        val isRemoteLock = intent.getBooleanExtra("EXTRA_IS_REMOTE_LOCK", false)
+
+        android.util.Log.d("GuardianAI_Debug", "[Lock] onCreate() pkg=$packageName showOverlay=$showOverlay isRemoteLock=$isRemoteLock")
         
-        if (!showOverlay) {
+        if (!showOverlay && !isRemoteLock) {
             @Suppress("DEPRECATION")
             overridePendingTransition(0, 0)
         }
@@ -210,7 +212,7 @@ class AppLockActivity : ComponentActivity() {
 
         setContent {
             GuardianAITheme {
-                InvisibleLockScreen(packageName = packageName, engine = engine, initialShowOverlay = showOverlay)
+                InvisibleLockScreen(packageName = packageName, engine = engine, initialShowOverlay = showOverlay, isRemoteLock = isRemoteLock)
             }
         }
     }
@@ -221,7 +223,7 @@ class AppLockActivity : ComponentActivity() {
     }
 
     @Composable
-    fun InvisibleLockScreen(packageName: String, engine: FaceBiometricEngine?, initialShowOverlay: Boolean) {
+    fun InvisibleLockScreen(packageName: String, engine: FaceBiometricEngine?, initialShowOverlay: Boolean, isRemoteLock: Boolean) {
         var showIntruderBlock by remember { mutableStateOf(false) }
         var showDebugLogs by remember { mutableStateOf(false) }
         var hasProfiles by remember { mutableStateOf(false) }
@@ -239,6 +241,12 @@ class AppLockActivity : ComponentActivity() {
         val session = remember { AuthenticationSession() }
         var capabilityManager: CameraCapabilityManager? by remember { mutableStateOf(null) }
         var authState by remember { mutableStateOf(AuthenticationState.INITIALIZING) }
+
+        if (isRemoteLock) {
+            showIntruderBlock = true
+            isScreenLocked = true
+            showLockScreenOverlay = true
+        }
 
         LaunchedEffect(session) {
             activeSession = session
@@ -280,6 +288,11 @@ class AppLockActivity : ComponentActivity() {
         var matchingThreshold by remember { mutableStateOf(FaceRecognitionConfig.MATCH_THRESHOLD) }
 
         LaunchedEffect(Unit) {
+            if (isRemoteLock) {
+                transitionToState(SessionLifecycleState.RUNNING)
+                addLog("[Security] Device Remotely Locked.")
+                return@LaunchedEffect
+            }
             transitionToState(SessionLifecycleState.RUNNING)
             engine?.resetWarmup()
             resetTimeout(LightingState.NORMAL)
@@ -323,8 +336,16 @@ class AppLockActivity : ComponentActivity() {
 
                         imageAnalysis.setAnalyzer(cameraExecutor!!) { imageProxy: ImageProxy ->
                             android.util.Log.d("GuardianAI_Phase2", "[Camera] ImageAnalysis received frame. Thread=${java.lang.Thread.currentThread().name}, Timestamp=${imageProxy.imageInfo.timestamp}, Rotation=${imageProxy.imageInfo.rotationDegrees}")
-                            if (context.isProcessingRef.getAndSet(true) || !hasProfiles || isUnlocked || isScreenLocked || context.cleanedUp.get()) {
-                                android.util.Log.d("GuardianAI_Phase2", "[Camera] Frame DROPPED (Throttling). ImageProxy close()")
+                            
+                            val wasAlreadyProcessing = context.isProcessingRef.getAndSet(true)
+                            if (wasAlreadyProcessing) {
+                                android.util.Log.d("GuardianAI_Phase2", "[Camera] Frame DROPPED (Throttling - Busy). ImageProxy close()")
+                                imageProxy.close()
+                                return@setAnalyzer
+                            }
+                            
+                            if (!hasProfiles || isUnlocked || isScreenLocked || context.cleanedUp.get()) {
+                                android.util.Log.d("GuardianAI_Phase2", "[Camera] Frame DROPPED (Throttling - Inactive). ImageProxy close()")
                                 imageProxy.close()
                                 context.isProcessingRef.set(false)
                                 return@setAnalyzer
@@ -556,9 +577,15 @@ class AppLockActivity : ComponentActivity() {
                 contentAlignment = Alignment.Center
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(32.dp)) {
-                    Text("Access Denied", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold, lineHeight = 28.sp)
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text("This app is protected.", color = Color.White.copy(alpha = 0.75f), fontSize = 14.sp, lineHeight = 20.sp)
+                    if (isRemoteLock) {
+                        Text("Remotely Locked", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold, lineHeight = 28.sp)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text("This device has been locked by the administrator.", color = Color.White.copy(alpha = 0.75f), fontSize = 14.sp, lineHeight = 20.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                    } else {
+                        Text("Access Denied", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold, lineHeight = 28.sp)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text("This app is protected.", color = Color.White.copy(alpha = 0.75f), fontSize = 14.sp, lineHeight = 20.sp)
+                    }
                 }
             }
         } else if (!showLockScreenOverlay) {

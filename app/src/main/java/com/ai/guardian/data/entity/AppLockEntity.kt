@@ -9,5 +9,6 @@ data class AppLockEntity(
     val packageName: String,
     val appName: String,
     val isProtected: Boolean = false,
-    val todayUsageMs: Long = 0
+    val todayUsageMs: Long = 0,
+    val lastServerTimestamp: Long = 0
 )

@@ -16,12 +16,21 @@
 -keep class com.ai.guardian.data.entity.** { *; }
 -keepclassmembers class com.ai.guardian.data.entity.** { *; }
 
-# Remove all debug logging in release builds to prevent leaking sensitive biometric/security states
+# Keep all remote and Firestore data models (avoids reflection crashes)
+-keep class com.ai.guardian.data.remote.models.** { *; }
+-keepclassmembers class com.ai.guardian.data.remote.models.** { *; }
+
+# Keep Accessibility and Foreground services
+-keep class com.ai.guardian.services.** { *; }
+
+# Keep Security components and KeyStore helpers
+-keep class com.ai.guardian.security.** { *; }
+
+# Strip verbose, info, and debug logs in release builds for security
 -assumenosideeffects class android.util.Log {
     public static boolean isLoggable(java.lang.String, int);
     public static int v(...);
     public static int i(...);
-    public static int w(...);
     public static int d(...);
-    public static int e(...);
 }
+

@@ -26,6 +26,7 @@ class GuardianAccessibilityService : AccessibilityService() {
     private var verificationJob: Job? = null
 
     private var currentPackageName: String = ""
+    private var currentClassName: String = ""
     private var lastForegroundPackage: String = ""
     private val windowEventFlow = MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     private var homePackages = setOf<String>()
@@ -43,9 +44,10 @@ class GuardianAccessibilityService : AccessibilityService() {
         override fun onReceive(context: Context?, intent: Intent?) {
             android.util.Log.d("GuardianAI_Debug", "[AS] screenReceiver.onReceive() action=${intent?.action}")
             if (intent?.action == Intent.ACTION_SCREEN_OFF) {
-                android.util.Log.d("GuardianAI_Debug", "[AS] SCREEN_OFF received. Resetting foreground package states and pausing polling.")
+                android.util.Log.d("GuardianAI_Debug", "[AS] SCREEN_OFF received. Resetting foreground package states, invalidating trusted session, and pausing polling.")
                 currentPackageName = ""
                 lastForegroundPackage = ""
+                invalidateTrustedSession()
                 verificationJob?.cancel()
             } else if (intent?.action == Intent.ACTION_SCREEN_ON) {
                 android.util.Log.d("GuardianAI_Debug", "[AS] SCREEN_ON received. Resuming periodic verification.")
@@ -134,20 +136,38 @@ class GuardianAccessibilityService : AccessibilityService() {
                 }
             }
 
-            // 2. Fallback to DevicePolicyManager (requires Device Admin to be active)
-            val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
-            val adminComponent = ComponentName(context, GuardianDeviceAdmin::class.java)
-            if (dpm.isAdminActive(adminComponent)) {
-                try {
-                    dpm.lockNow()
-                    android.util.Log.d("GuardianAI_Debug", "[Accessibility] Screen locked successfully via DevicePolicyManager.")
-                } catch (e: Exception) {
-                    android.util.Log.e("GuardianAI_Debug", "[Accessibility] Error locking screen via DevicePolicyManager", e)
-                }
-            } else {
-                android.util.Log.w("GuardianAI_Debug", "[Accessibility] Device admin not active, cannot lock screen.")
+            // 2. Fallback removed because Device Admin was removed.
+            android.util.Log.w("GuardianAI_Debug", "[Accessibility] Cannot lock screen: API level < 28 and Device Admin removed.")
+        }
+
+        fun reloadProtectedApps() {
+            // A remote device changed the protection state.
+            // By clearing the whitelist, any app that was just protected remotely
+            // will instantly be locked by the periodic verification loop (1.5s).
+            val service = getInstance()
+            if (service != null) {
+                resetWhitelist()
+                android.util.Log.d("GuardianAI_Debug", "[AS] reloadProtectedApps: Whitelist cleared for immediate remote lock enforcement.")
             }
         }
+        
+        fun isServiceRunning(): Boolean = getInstance() != null
+    }
+
+    override fun attachBaseContext(base: Context) {
+        super.attachBaseContext(object : android.content.ContextWrapper(base) {
+            override fun getSystemService(name: String): Any? {
+                if (Context.WINDOW_SERVICE == name) {
+                    try {
+                        return super.getSystemService(name)
+                    } catch (e: Exception) {
+                        android.util.Log.e("GuardianAI_Debug", "Intercepted OEM strict mode crash for WindowManager", e)
+                        return null
+                    }
+                }
+                return super.getSystemService(name)
+            }
+        })
     }
 
     override fun onCreate() {
@@ -195,6 +215,57 @@ class GuardianAccessibilityService : AccessibilityService() {
                     handlePackageChangeCheck()
                 }
         }
+
+        // Security Observers: Invalidate session when settings or app locks are changed in Room (either locally or remotely synced)
+        serviceScope.launch {
+            val db = com.ai.guardian.data.AppDatabase.getDatabase(this@GuardianAccessibilityService)
+            var isInitialSettings = true
+            db.deviceSettingsDao().getSettingsFlow().collect {
+                if (isInitialSettings) {
+                    isInitialSettings = false
+                } else {
+                    android.util.Log.d("GuardianAI_Debug", "[Security] Settings modified. Invalidating trusted session.")
+                    invalidateTrustedSession()
+                }
+            }
+        }
+        serviceScope.launch {
+            val db = com.ai.guardian.data.AppDatabase.getDatabase(this@GuardianAccessibilityService)
+            var isInitialAppLock = true
+            db.appLockDao().getAllAppsFlow().collect {
+                if (isInitialAppLock) {
+                    isInitialAppLock = false
+                } else {
+                    android.util.Log.d("GuardianAI_Debug", "[Security] App lock rules modified. Invalidating trusted session.")
+                    invalidateTrustedSession()
+                }
+            }
+        }
+        serviceScope.launch {
+            val db = com.ai.guardian.data.AppDatabase.getDatabase(this@GuardianAccessibilityService)
+            var isInitialPaired = true
+            db.pairedDeviceDao().getAllPairedDevices().collect {
+                if (isInitialPaired) {
+                    isInitialPaired = false
+                } else {
+                    android.util.Log.d("GuardianAI_Debug", "[Security] Paired devices modified. Invalidating trusted session.")
+                    invalidateTrustedSession()
+                }
+            }
+        }
+        serviceScope.launch {
+            val db = com.ai.guardian.data.AppDatabase.getDatabase(this@GuardianAccessibilityService)
+            var isInitialFaces = true
+            db.faceDao().getAllProfilesWithTemplatesFlow().collect {
+                if (isInitialFaces) {
+                    isInitialFaces = false
+                } else {
+                    android.util.Log.d("GuardianAI_Debug", "[Security] Face profiles modified. Invalidating trusted session.")
+                    invalidateTrustedSession()
+                }
+            }
+        }
+
         android.util.Log.d("GuardianAI_Debug", "[AS] Periodic verification loop started.")
     }
 
@@ -202,7 +273,16 @@ class GuardianAccessibilityService : AccessibilityService() {
         if (event == null) return
         val type = event.eventType
         val eventPkg = event.packageName?.toString() ?: "null"
-        android.util.Log.v("GuardianAI_Debug", "[AS] Event: type=$type pkg=$eventPkg")
+        
+        if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            val cls = event.className?.toString()
+            if (!cls.isNullOrEmpty()) {
+                currentClassName = cls
+                android.util.Log.v("GuardianAI_Debug", "[AS] Active ClassName updated: $currentClassName")
+            }
+        }
+
+        android.util.Log.v("GuardianAI_Debug", "[AS] Event: type=$type pkg=$eventPkg cls=${event.className}")
 
         if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
             type == AccessibilityEvent.TYPE_WINDOWS_CHANGED ||
@@ -326,7 +406,6 @@ class GuardianAccessibilityService : AccessibilityService() {
             val prevPackage = lastForegroundPackage
 
             // Full authentication state snapshot on every package transition.
-            // This single log line captures everything needed to diagnose stale sessions.
             val whitelistSnapshot = temporarilyUnlockedPackages.entries.joinToString(", ") {
                 val ttl = it.value - System.currentTimeMillis()
                 "${it.key}(TTL=${ttl}ms)"
@@ -352,6 +431,12 @@ class GuardianAccessibilityService : AccessibilityService() {
                 }
             } else {
                 currentPackageName = detectedPackage
+                checkAndLockPackage(detectedPackage)
+            }
+        } else {
+            // Package hasn't changed. But we must continuously check for sensitive screens (like going to App Info
+            // or an Uninstall dialog popping up) as long as it's not our own app or the home screen.
+            if (!detectedPackage.isNullOrEmpty() && detectedPackage !in homePackages && detectedPackage != "com.ai.guardian") {
                 checkAndLockPackage(detectedPackage)
             }
         }
@@ -395,23 +480,14 @@ class GuardianAccessibilityService : AccessibilityService() {
             return
         }
 
-        // When a protected app leaves foreground (transitions to launcher or any other app),
-        // immediately clear its whitelist entry. This is the replacement for the deprecated
-        // ACTION_CLOSE_SYSTEM_DIALOGS broadcast which no longer fires on Android 12+.
-        //
-        // Example: com.whatsapp → com.android.launcher3
-        //   previousPackage = com.whatsapp  ← clear this
-        //   newPackage      = com.android.launcher3
-        //
-        // We do NOT clear if previousPackage is "com.ai.guardian" because that transition
-        // means authentication just completed and we're returning to the target app.
-        if (previousPackage.isNotEmpty() &&
-            previousPackage != newPackage &&
-            previousPackage != "com.ai.guardian"
-        ) {
-            android.util.Log.d("GuardianAI_Debug", "[AS] resetSession: clearing whitelist for $previousPackage (left foreground)")
-            clearWhitelistForPackage(previousPackage)
+        if (previousPackage.isNotEmpty() && previousPackage != newPackage) {
+            // Only clear the whitelist for the app we just left (not Guardian itself)
+            if (previousPackage != "com.ai.guardian") {
+                android.util.Log.d("GuardianAI_Debug", "[AS] resetSession: clearing whitelist for $previousPackage (left foreground)")
+                clearWhitelistForPackage(previousPackage)
+            }
 
+            // If the user goes to the Home screen or Recents, always invalidate the trusted session
             if (newPackage in homePackages) {
                 if (com.ai.guardian.BuildConfig.DEBUG) {
                     android.util.Log.d("GuardianAI_Debug", "[AS] Home Launcher / Recents detected. Invalidating trusted session.")
@@ -423,6 +499,47 @@ class GuardianAccessibilityService : AccessibilityService() {
                 }
             }
         }
+    }
+
+    private fun isSensitiveSettingsScreen(packageName: String): Pair<Boolean, String> {
+        val cls = currentClassName.lowercase()
+        // 1. Fast Path: Class Name Check
+        if (cls.contains("deviceadmin") || cls.contains("device_admin")) return Pair(true, "access Device Administrator settings")
+        if (cls.contains("accessibility") && !cls.contains("shortcut")) return Pair(true, "access Accessibility settings")
+        if (cls.contains("installedappdetails") || cls.contains("appinfo") || cls.contains("applicationdetails") || cls.contains("appmemoryusage")) return Pair(true, "access App Details/Uninstall")
+
+        // 2. Robust Path: Node Text Scan (for OEMs like Vivo)
+        var sensitiveFound = false
+        var reason = ""
+        try {
+            val root = rootInActiveWindow ?: return Pair(false, "")
+            val queue = java.util.ArrayDeque<android.view.accessibility.AccessibilityNodeInfo>()
+            queue.add(root)
+            
+            var nodesChecked = 0
+            while (queue.isNotEmpty() && nodesChecked < 100) { // Limit depth to prevent lag
+                val node = queue.poll()
+                if (node == null) continue
+                nodesChecked++
+                
+                val text = node.text?.toString()?.lowercase() ?: node.contentDescription?.toString()?.lowercase()
+                if (text != null) {
+                    if (text == "device admin apps" || text == "device administrators") { sensitiveFound = true; reason = "access Device Admin apps"; break }
+                    if (text == "uninstall" || text == "deactivate" || text == "force stop") { sensitiveFound = true; reason = "uninstall or modify apps"; break }
+                    // We avoid blindly matching "accessibility" text to prevent false positives on main settings menu,
+                    // relying on the class name for the actual Accessibility submenu.
+                }
+                
+                for (i in 0 until node.childCount) {
+                    val child = node.getChild(i)
+                    if (child != null) queue.add(child)
+                }
+                try { node.recycle() } catch (e: Exception) {}
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("GuardianAI_Debug", "[AS] isSensitiveSettingsScreen error: ${e.message}")
+        }
+        return Pair(sensitiveFound, reason)
     }
 
     private fun checkAndLockPackage(packageName: String) {
@@ -441,7 +558,60 @@ class GuardianAccessibilityService : AccessibilityService() {
         serviceScope.launch(Dispatchers.IO) {
             val container = (applicationContext as com.ai.guardian.GuardianApplication).container
             val settings = container.deviceSettingsDao.getSettings()
+
+            // ── Settings / Device Admin / Global Uninstall Interception ───────────────
+            // We run the sensitive screen scanner for ALL apps (since uninstall popups can
+            // originate from Launchers, Play Store, or OEM specific security apps like Vivo's iManager).
+            val isPinConfigured = settings?.isPinConfigured ?: false
+            val maintenanceActive = com.ai.guardian.security.MaintenanceModeManager.isMaintenanceModeActive()
             
+            if (isPinConfigured && !maintenanceActive) {
+                val (isSensitive, reason) = isSensitiveSettingsScreen(packageName)
+                    if (isSensitive) {
+                        android.util.Log.d("GuardianAI_Debug", "[PinGate] Sensitive Settings detected: $reason. Launching PinVerificationActivity.")
+                        withContext(Dispatchers.Main) {
+                            val intent = Intent(applicationContext, com.ai.guardian.ui.screens.PinVerificationActivity::class.java).apply {
+                                putExtra("EXTRA_ACTION_NAME", reason)
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
+                            }
+                            try {
+                                startActivity(intent)
+                            } catch (t: Throwable) {
+                                android.util.Log.e("GuardianAI_Debug", "[PinGate] Failed to launch PinVerificationActivity", t)
+                            }
+                        }
+                        return@launch
+                    }
+                }
+
+            // 1. Emergency Remote Lock Check
+            val isRemotelyLocked = settings?.isRemotelyLocked ?: false
+            if (isRemotelyLocked) {
+                android.util.Log.d("GuardianAI_Debug", "[Accessibility] Device is remotely locked. Intercepting $packageName")
+                val showOverlay = settings?.showLockScreenOverlay ?: true
+                withContext(Dispatchers.Main) {
+                    val intent = Intent(applicationContext, com.ai.guardian.ui.screens.AppLockActivity::class.java).apply {
+                        putExtra("EXTRA_PACKAGE_NAME", packageName)
+                        putExtra("EXTRA_SHOW_OVERLAY", showOverlay)
+                        putExtra("EXTRA_IS_REMOTE_LOCK", true)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
+                    }
+                    try {
+                        if (!com.ai.guardian.services.AppLockLaunchManager.isLaunching.compareAndSet(false, true)) {
+                            return@withContext
+                        }
+                        com.ai.guardian.services.AppLockLaunchManager.scheduleLaunchTimeout()
+                        startActivity(intent)
+                    } catch (t: Throwable) {
+                        com.ai.guardian.services.AppLockLaunchManager.reset()
+                        if (com.ai.guardian.BuildConfig.DEBUG) {
+                            android.util.Log.e("GuardianAI_Debug", "Failed to launch AppLockActivity for remote lock", t)
+                        }
+                    }
+                }
+                return@launch
+            }
+
             val isGlobalProtectionOn = settings?.isProtectionEnabled ?: false
             if (!isGlobalProtectionOn) {
                 android.util.Log.d("GuardianAI_Debug", "[Accessibility] Global protection is disabled. Ignoring $packageName")

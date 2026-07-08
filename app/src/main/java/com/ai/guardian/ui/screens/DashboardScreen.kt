@@ -27,6 +27,7 @@ import androidx.navigation.NavController
 import com.ai.guardian.GuardianApplication
 import com.ai.guardian.data.entity.RecognitionHistoryEntity
 import com.ai.guardian.ui.theme.*
+import com.ai.guardian.utils.OemRestrictionDetector
 import com.ai.guardian.viewmodel.MainViewModel
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -43,6 +44,50 @@ fun DashboardScreen(viewModel: MainViewModel, navController: NavController) {
 
     val greetingName       = remember(enrolledFaces) { enrolledFaces.firstOrNull()?.profile?.name ?: "there" }
     val appsProtectedCount = remember(lockedApps)  { lockedApps.count { it.isProtected } }
+
+    var showOemDialog by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        if (OemRestrictionDetector.isOemRestricted() && !OemRestrictionDetector.hasPrompted(context)) {
+            showOemDialog = true
+        }
+    }
+
+    if (showOemDialog) {
+        AlertDialog(
+            onDismissRequest = { 
+                showOemDialog = false 
+                OemRestrictionDetector.markPrompted(context)
+            },
+            title = { Text("Disable Battery Restrictions") },
+            text = { Text("Your device manufacturer (${OemRestrictionDetector.getOemName().uppercase()}) may terminate Guardian in the background. To ensure continuous protection, please allow Guardian to run in the background without battery restrictions.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showOemDialog = false
+                    OemRestrictionDetector.markPrompted(context)
+                    val intent = OemRestrictionDetector.getOemSettingsIntent(context)
+                    if (intent != null) {
+                        try {
+                            context.startActivity(intent)
+                        } catch (e: Exception) {
+                            android.util.Log.e("DashboardScreen", "Failed to start OEM settings activity", e)
+                        }
+                    }
+                }) {
+                    Text("Go to Settings")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { 
+                    showOemDialog = false 
+                    OemRestrictionDetector.markPrompted(context)
+                }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
     val todayUnlocks       = remember(logs) { logs.count { it.authResult } }
     val blockedAttempts    = remember(logs) { logs.count { !it.authResult } }
 

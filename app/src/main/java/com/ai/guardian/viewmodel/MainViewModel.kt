@@ -11,6 +11,7 @@ import com.ai.guardian.data.entity.AppLockEntity
 import com.ai.guardian.data.entity.DeviceSettingsEntity
 import com.ai.guardian.data.entity.FaceProfileWithTemplates
 import com.ai.guardian.data.entity.RecognitionHistoryEntity
+import com.ai.guardian.data.remote.DeviceSyncManager
 import com.ai.guardian.ui.theme.ThemeMode
 import com.ai.guardian.ui.theme.ThemePreferences
 import kotlinx.coroutines.Dispatchers
@@ -22,7 +23,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-class MainViewModel(application: Application) : AndroidViewModel(application) {
+class MainViewModel(private val application: Application) : AndroidViewModel(application) {
     private val container        = (application as GuardianApplication).container
     private val themePreferences = ThemePreferences(application)
 
@@ -44,22 +45,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var reenrollProfileId by androidx.compose.runtime.mutableStateOf<Long?>(null)
     var reenrollProfileName by androidx.compose.runtime.mutableStateOf<String?>(null)
 
+    var pinProtectedAction by mutableStateOf<(() -> Unit)?>(null)
+    var pinProtectedActionName by mutableStateOf("")
+
     /** Persisted theme selection — defaults to SYSTEM until DataStore emits. */
     val themeMode: StateFlow<ThemeMode> = themePreferences.themeModeFlow
         .stateIn(
-            scope         = viewModelScope,
-            started       = SharingStarted.Eagerly,
-            initialValue  = ThemeMode.SYSTEM
+            scope        = viewModelScope,
+            started      = SharingStarted.Eagerly,
+            initialValue = ThemeMode.SYSTEM
         )
 
     init {
+        // Collect flows to state variables for UI
         viewModelScope.launch {
             container.faceDao.getAllProfilesWithTemplatesFlow().collect { faces ->
                 _enrolledFaces.value = faces
                 _hasFaceEnrolled.value = faces.isNotEmpty()
             }
         }
-        
+
         viewModelScope.launch {
             container.recognitionHistoryDao.getAllHistoryFlow().collect { history ->
                 _recognitionHistory.value = history
@@ -79,13 +84,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         viewModelScope.launch {
-            container.appLockDao.getAllAppsFlow().collect { apps ->
+            container.appLockRepository.getAllAppsFlow().collect { apps ->
                 _lockedApps.value = apps
             }
         }
     }
 
-    /** Persists theme choice and immediately updates the StateFlow. */
+    fun runWithPinProtection(actionName: String, onApproved: () -> Unit) {
+        viewModelScope.launch {
+            val s = container.deviceSettingsDao.getSettings()
+            if (s == null || !s.isPinConfigured || com.ai.guardian.security.MaintenanceModeManager.isMaintenanceModeActive()) {
+                onApproved()
+            } else {
+                pinProtectedActionName = actionName
+                pinProtectedAction = onApproved
+            }
+        }
+    }
+
+    /** Persisted theme choice and immediately updates the StateFlow. */
     fun setThemeMode(mode: ThemeMode) {
         viewModelScope.launch {
             themePreferences.setThemeMode(mode)
@@ -93,44 +110,71 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun toggleGlobalProtection(enabled: Boolean) {
-        viewModelScope.launch {
-            val settings = container.deviceSettingsDao.getSettings() ?: DeviceSettingsEntity()
-            container.deviceSettingsDao.insertOrUpdateSettings(settings.copy(isProtectionEnabled = enabled))
+        val actionText = if (enabled) "enable Guardian protection" else "disable Guardian protection"
+        runWithPinProtection(actionText) {
+            viewModelScope.launch {
+                val settings = container.deviceSettingsDao.getSettings() ?: DeviceSettingsEntity()
+                container.deviceSettingsDao.insertOrUpdateSettings(settings.copy(isProtectionEnabled = enabled))
+            }
         }
     }
 
     fun updateShowLockScreenOverlay(show: Boolean) {
-        viewModelScope.launch {
-            val settings = container.deviceSettingsDao.getSettings() ?: DeviceSettingsEntity()
-            container.deviceSettingsDao.insertOrUpdateSettings(settings.copy(showLockScreenOverlay = show))
+        val actionText = if (show) "enable Face Protection overlay" else "disable Face Protection overlay"
+        runWithPinProtection(actionText) {
+            viewModelScope.launch {
+                val settings = container.deviceSettingsDao.getSettings() ?: DeviceSettingsEntity()
+                container.deviceSettingsDao.insertOrUpdateSettings(settings.copy(showLockScreenOverlay = show))
+            }
         }
     }
 
     fun updateTrustedAuthDurationMinutes(minutes: Int) {
-        viewModelScope.launch {
-            val settings = container.deviceSettingsDao.getSettings() ?: DeviceSettingsEntity()
-            container.deviceSettingsDao.insertOrUpdateSettings(settings.copy(trustedAuthDurationMinutes = minutes))
+        val actionText = if (minutes > 0) "enable trusted cache" else "disable trusted cache"
+        runWithPinProtection(actionText) {
+            viewModelScope.launch {
+                val settings = container.deviceSettingsDao.getSettings() ?: DeviceSettingsEntity()
+                container.deviceSettingsDao.insertOrUpdateSettings(settings.copy(trustedAuthDurationMinutes = minutes))
+            }
+        }
+    }
+
+    fun updateLivenessDetection(enabled: Boolean) {
+        val actionText = if (enabled) "enable liveness detection" else "disable liveness detection"
+        runWithPinProtection(actionText) {
+            viewModelScope.launch {
+                val settings = container.deviceSettingsDao.getSettings() ?: DeviceSettingsEntity()
+                container.deviceSettingsDao.insertOrUpdateSettings(
+                    settings.copy(
+                        isLivenessDetectionEnabled = enabled,
+                        configurationVersion = settings.configurationVersion + 1
+                    )
+                )
+            }
         }
     }
 
     fun updateMatchingThreshold(threshold: Float) {
-        viewModelScope.launch {
-            val settings = container.deviceSettingsDao.getSettings() ?: DeviceSettingsEntity()
-            container.deviceSettingsDao.insertOrUpdateSettings(settings.copy(matchingThreshold = threshold))
+        runWithPinProtection("modify matching threshold") {
+            viewModelScope.launch {
+                val settings = container.deviceSettingsDao.getSettings() ?: DeviceSettingsEntity()
+                container.deviceSettingsDao.insertOrUpdateSettings(settings.copy(matchingThreshold = threshold))
+            }
         }
     }
 
     fun toggleAppLock(app: AppLockEntity) {
         viewModelScope.launch {
-            // Simply insert the app entity which will REPLACE on conflict.
-            container.appLockDao.insertApp(app)
+            container.appLockRepository.insertApp(app)
         }
     }
 
     fun deleteFaceById(id: Long) {
-        viewModelScope.launch {
-            withContext(Dispatchers.IO) {
-                container.faceDao.deleteProfileById(id)
+        runWithPinProtection("delete face profile") {
+            viewModelScope.launch {
+                withContext(Dispatchers.IO) {
+                    container.faceDao.deleteProfileById(id)
+                }
             }
         }
     }
@@ -152,9 +196,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun deleteAllFaces() {
-        viewModelScope.launch {
-            withContext(Dispatchers.IO) {
-                container.faceDao.deleteAllProfiles()
+        runWithPinProtection("delete all face profiles") {
+            viewModelScope.launch {
+                withContext(Dispatchers.IO) {
+                    container.faceDao.deleteAllProfiles()
+                }
             }
         }
     }
@@ -163,6 +209,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
                 container.recognitionHistoryDao.deleteAllHistory()
+            }
+        }
+    }
+
+    fun setInitialChildPin(pin: String, context: android.content.Context) {
+        viewModelScope.launch {
+            if (pin.length in 4..6 && pin.all { it.isDigit() }) {
+                val pinManager = com.ai.guardian.security.SecurityPinManager(context)
+                val savedModel = pinManager.savePin(pin)
+                val currentSettings = container.deviceSettingsDao.getSettings() ?: com.ai.guardian.data.entity.DeviceSettingsEntity()
+                val updated = currentSettings.copy(
+                    securityPinHash = savedModel.encryptedHash,
+                    securityPinIv = savedModel.iv,
+                    securityPinSalt = savedModel.salt,
+                    isPinConfigured = true,
+                    pinVersion = currentSettings.pinVersion + 1,
+                    pinUpdatedAt = System.currentTimeMillis(),
+                    pinResetRequired = false,
+                    configurationVersion = currentSettings.configurationVersion + 1
+                )
+                container.deviceSettingsDao.insertOrUpdateSettings(updated)
             }
         }
     }

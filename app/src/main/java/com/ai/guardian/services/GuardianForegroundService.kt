@@ -26,7 +26,20 @@ class GuardianForegroundService : Service() {
         super.onCreate()
         android.util.Log.d("GuardianAI_Phase1", "[Init] GuardianForegroundService onCreate() called. PID=${android.os.Process.myPid()}")
         android.util.Log.d("GuardianAI_Debug", "[FS] onCreate() called. PID=${android.os.Process.myPid()}")
+        
+        com.ai.guardian.utils.BatteryOptimizationUtil.checkAndLogOptimizationStatus(this)
+        
         startForegroundService()
+        
+        val container = (applicationContext as com.ai.guardian.GuardianApplication).container
+        container.syncEngineManager.start()
+        
+        // Phase 2: Fire process restart audit event and apply Device Owner policies
+        container.tamperDetectionManager.log(
+            com.ai.guardian.security.AuditEvent.PROCESS_STARTED,
+            "GuardianForegroundService started. PID=${android.os.Process.myPid()}"
+        )
+        container.devicePolicyController.applyAllPolicies()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -45,7 +58,26 @@ class GuardianForegroundService : Service() {
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
-        android.util.Log.e("GuardianAI_Debug", "[FS] onTaskRemoved() called! PID=${android.os.Process.myPid()}. The service will rely on START_STICKY or Accessibility Service for restart.")
+        android.util.Log.e("GuardianAI_Debug", "[FS] onTaskRemoved() called! PID=${android.os.Process.myPid()}.")
+
+        if (com.ai.guardian.utils.OemRestrictionDetector.isOemRestricted()) {
+            android.util.Log.d("GuardianAI_Debug", "[FS] Aggressive OEM detected. Scheduling AlarmManager fallback restart in 5s.")
+            val restartIntent = Intent(this, GuardianForegroundService::class.java)
+            val pendingIntent = android.app.PendingIntent.getService(
+                this,
+                REQUEST_CODE_SERVICE_RESTART,
+                restartIntent,
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+            )
+            val alarmManager = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+            alarmManager.set(
+                android.app.AlarmManager.ELAPSED_REALTIME,
+                android.os.SystemClock.elapsedRealtime() + 5000L,
+                pendingIntent
+            )
+        } else {
+            android.util.Log.d("GuardianAI_Debug", "[FS] Non-restrictive AOSP/Pixel/Samsung device. Relying on START_STICKY for service recovery.")
+        }
     }
 
     private fun handlePackageChanged(packageName: String) {
@@ -130,6 +162,8 @@ class GuardianForegroundService : Service() {
     override fun onDestroy() {
         android.util.Log.e("GuardianAI_Debug", "[FS] onDestroy() called! PID=${android.os.Process.myPid()}")
         super.onDestroy()
+        val container = (applicationContext as com.ai.guardian.GuardianApplication).container
+        container.syncEngineManager.stop()
         serviceScope.cancel()
     }
 
@@ -137,5 +171,6 @@ class GuardianForegroundService : Service() {
         const val ACTION_PACKAGE_CHANGED = "ACTION_PACKAGE_CHANGED"
         const val EXTRA_PACKAGE_NAME = "EXTRA_PACKAGE_NAME"
         const val ACTION_WHITELIST_PACKAGE = "ACTION_WHITELIST_PACKAGE"
+        private const val REQUEST_CODE_SERVICE_RESTART = 1001
     }
 }
